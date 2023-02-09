@@ -1,7 +1,9 @@
 const axios = require("axios");
 const express = require("express");
-const Mailer = require("./Mailer");
 require('dotenv').config();
+
+const sgMail = require('@sendgrid/mail')
+sgMail.setApiKey(process.env.SENDGRID_API_KEY)
 
 const app = express();
 
@@ -10,10 +12,17 @@ app.listen(process.env.PORT || 3000, ()=>{
 })
 
 app.post('/send-latest-invoice', async (req, res) => {
-	console.log("Sending invoice!")
+	console.log("\n\nNew request!", req.query)
+	let { companyId, recipient, test } = req.query;
+
+	// For safety, consider this a test unless specifically set to false
+	test = Boolean(test !== 'false');
+	
 	try {
-		await sendLatestInvoice();
-		res.status(200).json({message: 'Successfully sent invoice!'});
+		const details = await sendLatestInvoice(companyId, recipient, test);
+		console.log("Success.")
+		console.log(details)
+		res.status(200).json({message: 'Successfully sent invoice!', details});
 	}
 	catch(e) {
 		console.log(e);
@@ -27,12 +36,6 @@ let avazaApi = axios.create({
     headers: { "Authorization": "Bearer " + process.env.AVAZA_TOKEN },
 });
 
-const mailer = new Mailer({
-	domain: process.env.MAIL_DOMAIN,
-	apiKey: process.env.MAIL_API_KEY,
-	sender: process.env.MAIL_DEFAULT_SENDER,
-})
-
 const formatDate = (ts) => {
 	return new Date(ts).toDateString();
 }
@@ -44,28 +47,70 @@ const formatDollar = (num) => {
 	}).format(num);
 }
 
-const sendLatestInvoice = async () => {
+const sendLatestInvoice = async ( companyId, recipient, test ) => {
+	const info = [];
 	const { status, data } = await avazaApi.get('Invoice?pageSize=1&pageNumber=1&Sort=InvoiceNumber');
 	if (status !== 200) {
 		throw new Error("Could not get invoices");
 	}
-	const { Invoices: { 0: invoice} } =  data;
+	const { Invoices: { 0: invoice} } = data;
 
-	console.log('Got invoice #' + invoice.InvoiceNumber);
+	info.push('Got invoice #' + invoice.InvoiceNumber);
 
 	if (invoice.DateSent) {
-		console.log("Invoice was already sent on " + formatDate(invoice.DateSent));
+		info.push("Invoice was already sent on " + formatDate(invoice.DateSent));
 	}
 
-    let msg = {
-		to: process.env.MAIL_RECEIVER,
+	if (!recipient) {
+		try {
+			const res = await avazaApi.get('Contact?CompanyIDFK=' + invoice.CompanyIDFK);
+			if (res.status !== 200) {
+				console.error("Could not get contacts!", res);
+			}
+			const { Contacts } = res.data;
+			recipient = Contacts.find(c => c.PositionTitle === 'invoice_receiver');
+			info.push('Found recipient by company position: ' + recipient.Email)
+		}
+		catch (e) {
+			console.error(e);
+		}
+	}
+  
+	let sendTo = recipient.Email || process.env.MAIL_RECEIVER;
+	if (test) {
+		sendTo = process.env.MAIL_RECEIVER;
+		info.push('Overriding recipient because this is a test');
+	}
+
+	const msg = {
+		to: sendTo,
+		cc: (!test && recipient) ? process.env.MAIL_RECEIVER : undefined,
+		from: process.env.MAIL_DEFAULT_SENDER,
 		subject: "Arthur Judd Invoice #" + invoice.InvoiceNumber,
+		text: `
+			${ test ? `THIS IS A TEST` : ''}
+			${ recipient ? `Hi ${recipient.Firstname},` : ''}
+			An invoice from Arthur Judd is ready for you.
+			
+			Subject: ${invoice.Subject}
+			Invoice #: ${invoice.Subject}
+			Date: ${formatDate(invoice.DateIssued)}
+			Amount Due: ${formatDollar(invoice.TotalAmount)}
+
+			View invoice: ${invoice.Links.ClientView}
+		`,
 		html: `
-			<p>A new invoice from Arthur Judd is ready for you.</p>
+			${ test ? `<p>THIS IS A TEST</p>` : ''}
+			${ recipient?.Firstname ? `<p>Hi ${recipient.Firstname},</p>` : ''}
+			<p>An invoice from Arthur Judd is ready for you.</p>
 		
 			<table style="text-align: left; border-spacing: 10px;">
 				<tr>
-					<th>Invoice</th>
+					<th>Subject</th>
+					<td>${invoice.Subject}</td>
+				</tr>
+				<tr>
+					<th>Invoice #</th>
 					<td>${invoice.InvoiceNumber}</td>
 				</tr>
 				<tr>
@@ -85,7 +130,7 @@ const sendLatestInvoice = async () => {
 					background: #0bf;
 					color: white;
 					display: inline-block;
-					padding: 7px;
+					padding: 10px 15px;
 					font-size: 16px;
 					border-radius: 2px;
 					cursor: pointer;
@@ -95,13 +140,27 @@ const sendLatestInvoice = async () => {
 			>
 				View Invoice
 			</a>
+
+			<p>
+				Click the button above to view the full invoice, or copy and paste this link into your browser:
+				<br/>
+				<a href="${invoice.Links.ClientView}">${invoice.Links.ClientView}</a>
+			</p>
 		`
 	}
-  
-	await mailer.send(msg, (error, body) => {
-		if (error) {
-			throw error;
-		}
-		console.log("Sent email:", body)
-	})
+
+	try {
+		// await sgMail.send(msg);
+		const details = {
+			test,
+			sentTo: sendTo,
+			invoice: invoice.InvoiceNumber,
+			info
+		};
+		return details;
+	}
+	catch(e) {
+		console.error(e.response.body.errors);
+		throw new Error("Error sending email!")
+	}
 }
