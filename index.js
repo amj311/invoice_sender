@@ -13,13 +13,13 @@ app.listen(process.env.PORT || 3000, ()=>{
 
 app.post('/send-latest-invoice', async (req, res) => {
 	console.log("\n\nNew request!", req.query)
-	let { companyId, recipient, test } = req.query;
+	let { companyId, sendTo, test } = req.query;
 
 	// For safety, consider this a test unless specifically set to false
 	test = Boolean(test !== 'false');
 	
 	try {
-		const details = await sendLatestInvoice(companyId, recipient, test);
+		const details = await sendLatestInvoice(companyId, sendTo, test);
 		console.log("Success.")
 		console.log(details)
 		res.status(200).json({message: 'Successfully sent invoice!', details});
@@ -47,7 +47,7 @@ const formatDollar = (num) => {
 	}).format(num);
 }
 
-const sendLatestInvoice = async ( companyId, recipient, test ) => {
+const sendLatestInvoice = async ( companyId, sendToOverride, test ) => {
 	const info = [];
 	const { status, data } = await avazaApi.get('Invoice?pageSize=1&pageNumber=1&Sort=InvoiceNumber');
 	if (status !== 200) {
@@ -61,35 +61,40 @@ const sendLatestInvoice = async ( companyId, recipient, test ) => {
 		info.push("Invoice was already sent on " + formatDate(invoice.DateSent));
 	}
 
-	if (!recipient) {
+	// Unless a recipient override has been given, lookup designated contact
+	let contact = null;
+	if (!sendToOverride) {
 		try {
 			const res = await avazaApi.get('Contact?CompanyIDFK=' + invoice.CompanyIDFK);
 			if (res.status !== 200) {
 				console.error("Could not get contacts!", res);
 			}
 			const { Contacts } = res.data;
-			recipient = Contacts.find(c => c.PositionTitle === 'invoice_receiver');
-			info.push('Found recipient by company position: ' + recipient.Email)
+			contact = Contacts.find(c => c.PositionTitle === 'invoice_receiver');
+			info.push('Found contact by company position: ' + contact.Email)
 		}
 		catch (e) {
 			console.error(e);
+			info.push('Error when looking up contact: ' + e.message)
 		}
 	}
-  
-	let sendTo = recipient.Email || process.env.MAIL_RECEIVER;
+
+	let to = sendToOverride || (contact.Email) || process.env.MAIL_BCC;
+	info.push('Determined recipient: ' + to);
 	if (test) {
-		sendTo = process.env.MAIL_RECEIVER;
+		to = process.env.MAIL_BCC;
 		info.push('Overriding recipient because this is a test');
 	}
+	let bcc = (to !== process.env.MAIL_BCC) ? process.env.MAIL_BCC : undefined;
 
 	const msg = {
-		to: sendTo,
-		cc: (!test && recipient) ? process.env.MAIL_RECEIVER : undefined,
+		to,
+		bcc,
 		from: process.env.MAIL_DEFAULT_SENDER,
 		subject: "Arthur Judd Invoice #" + invoice.InvoiceNumber,
 		text: `
 			${ test ? `THIS IS A TEST` : ''}
-			${ recipient ? `Hi ${recipient.Firstname},` : ''}
+			${ contact ? `Hi ${contact.Firstname},` : ''}
 			An invoice from Arthur Judd is ready for you.
 			
 			Subject: ${invoice.Subject}
@@ -101,7 +106,7 @@ const sendLatestInvoice = async ( companyId, recipient, test ) => {
 		`,
 		html: `
 			${ test ? `<p>THIS IS A TEST</p>` : ''}
-			${ recipient?.Firstname ? `<p>Hi ${recipient.Firstname},</p>` : ''}
+			${ contact?.Firstname ? `<p>Hi ${contact.Firstname},</p>` : ''}
 			<p>An invoice from Arthur Judd is ready for you.</p>
 		
 			<table style="text-align: left; border-spacing: 10px;">
@@ -150,10 +155,11 @@ const sendLatestInvoice = async ( companyId, recipient, test ) => {
 	}
 
 	try {
-		// await sgMail.send(msg);
+		await sgMail.send(msg);
 		const details = {
 			test,
-			sentTo: sendTo,
+			sentTo: to,
+			bcc: bcc || "No BCC",
 			invoice: invoice.InvoiceNumber,
 			info
 		};
