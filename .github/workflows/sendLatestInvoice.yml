@@ -1,8 +1,8 @@
 name: Send Latest Invoice
 on:
   schedule:
-    # * is a special character in YAML so you have to quote this string
-    - cron:  '*/5 * * * *'
+    # 6 am MST (12 pm UTC) first day of every month
+    - cron:  '0 12 1 */1 *'
   
 jobs:
   sendInvoice:
@@ -27,4 +27,4 @@ jobs:
         run: npm install
 
       - name: Send It!
-        run: node scripts/sendLatestInvoice.js test=true sendTo=cheetolick311@gmail.com
+        run: node scripts/sendLatestInvoice.js test=false
