@@ -6,6 +6,13 @@ on:
   
 jobs:
   sendInvoice:
+    env:
+      AVAZA_TOKEN: ${{secrets.AVAZA_TOKEN}}
+      MAIL_DEFAULT_SENDER: ${{secrets.MAIL_DEFAULT_SENDER}}
+      MAIL_TEST_RECIPIENT: ${{secrets.MAIL_TEST_RECIPIENT}}
+      MAIL_BCC: ${{secrets.MAIL_BCC}}
+      SENDGRID_API_KEY: ${{secrets.SENDGRID_API_KEY}}
+
     name: Send Latest Invoice
     runs-on: ubuntu-latest
     steps:
