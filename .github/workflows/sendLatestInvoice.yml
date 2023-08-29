@@ -1,8 +1,8 @@
-name: GH Actions Cron Schedule
+name: Send Latest Invoice
 on:
   schedule:
     # * is a special character in YAML so you have to quote this string
-    - cron:  '5 * * * *'
+    - cron:  '*/5 * * * *'
   
 jobs:
   sendInvoice:
